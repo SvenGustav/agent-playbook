@@ -10,5 +10,6 @@ Then pick the playbook for the work at hand.
 - Reviewing your own work: `playbooks/04-review-loops.md`
 - Scheduling work that must survive the session: `playbooks/05-durable-jobs.md`
 - Long session with slow calls: `playbooks/06-context-budget.md`
+- Adding or auditing CI: `playbooks/07-ci-gates.md`
 
 Run `make lint` after editing a playbook.

@@ -1,0 +1,92 @@
+# Copy this into .github/workflows/pr-gate.yml and fill in the build steps.
+#
+# Shape: a cheap gate job decides whether the expensive work runs, checks do the real
+# work, and deploy only happens when checks pass on the default branch.
+name: pr-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One run per branch. Pushing three times should not queue three full pipelines.
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Decide what to run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        run: |
+          if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "draft, skipping"; exit 0
+          fi
+          if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q 'skip-ci'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "skip-ci label, skipping"; exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: Build and validate
+    needs: [gate]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Mechanical gates first: a failure here should not wait for the build.
+      - name: Lint and format
+        run: npm run lint && npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      # The build proves imports resolve. This proves the links resolve.
+      # Requires bin/check_links.py in the repo. Standard library only.
+      - name: Internal links
+        run: python3 bin/check_links.py --dist dist --redirects vercel.json
+
+      - name: Security scan
+        run: |
+          if grep -rInE '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY)' \
+               --include='*.js' --include='*.ts' --include='*.json' --include='*.astro' .; then
+            echo "possible secret committed"; exit 1
+          fi
+          npm audit --omit=dev --audit-level=high
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+  deploy:
+    name: Deploy preview
+    needs: [checks]
+    if: needs.checks.result == 'success' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Deploy
+        run: |
+          echo "Replace with your deploy command. Nothing deploys unless checks succeeded."

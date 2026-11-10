@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 BANNED = {
     "\u2014": "em dash",
     "\u2013": "en dash",
@@ -49,6 +51,35 @@ def check(path: Path, root: Path, require_shape: bool = True) -> tuple[list[str]
     return problems, words
 
 
+def check_workflow(path: Path) -> list[str]:
+    """A workflow template is only useful if it parses and declares its permissions."""
+    problems: list[str] = []
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        return [f"does not parse: {str(error).splitlines()[0]}"]
+    if not isinstance(document, dict):
+        return ["top level is not a mapping"]
+    # PyYAML reads a bare `on:` key as boolean True, the same YAML 1.1 quirk that turns
+    # an unquoted NO into false.
+    present = {"on" if key is True else key for key in document}
+    for key in ("name", "on", "jobs"):
+        if key not in present:
+            problems.append(f"missing '{key}'")
+    if "permissions" not in document:
+        problems.append("no 'permissions' block, so the token keeps its defaults")
+    jobs = document.get("jobs") or {}
+    if not isinstance(jobs, dict) or not jobs:
+        problems.append("no jobs")
+    for name, job in (jobs or {}).items():
+        if not isinstance(job, dict):
+            problems.append(f"job {name} is not a mapping")
+            continue
+        if "timeout-minutes" not in job:
+            problems.append(f"job {name} has no timeout")
+    return problems
+
+
 def lint(root: Path) -> int:
     failures = 0
     playbooks = sorted((root / "playbooks").glob("*.md"))
@@ -71,6 +102,15 @@ def lint(root: Path) -> int:
         for problem in problems:
             print(f"       {problem}")
         failures += bool(problems)
+
+    for pattern in ("ci/*.yml", ".github/workflows/*.yml"):
+        for path in sorted(root.glob(pattern)):
+            problems = check_workflow(path)
+            status = "ok  " if not problems else "FAIL"
+            print(f"[{status}] {path.relative_to(root)}")
+            for problem in problems:
+                print(f"       {problem}")
+            failures += bool(problems)
 
     print(f"\n{len(playbooks)} playbooks, {failures} with problems")
     return 1 if failures else 0

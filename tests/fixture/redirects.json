@@ -1,0 +1,5 @@
+{
+  "redirects": [
+    { "source": "/old-page", "destination": "/about", "permanent": true }
+  ]
+}
